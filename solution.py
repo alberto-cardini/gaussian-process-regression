@@ -2,7 +2,7 @@ import os
 import typing
 from sklearn.gaussian_process.kernels import *
 import numpy as np
-from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process import GaussianProcessRegressor as gp
 import matplotlib.pyplot as plt
 from matplotlib import cm
 
@@ -32,6 +32,13 @@ class Model(object):
 
         # TODO: Add custom initialization for your model here if necessary
 
+        self.kernels = [RBF() + WhiteKernel(noise_level=1.0),
+                   RationalQuadratic()+WhiteKernel(noise_level=1.0),
+                   ExpSineSquared(periodicity=10.0)+WhiteKernel(noise_level=1.0),
+                   DotProduct(sigma_0=1.0)**2+WhiteKernel(noise_level=1.0),
+                   Matern()+WhiteKernel(noise_level=1.0)
+                   ]
+
     # Don't change the name or the signature of this function
     def fit_model(self, train_coordinates: np.ndarray, train_pollution_targets: np.ndarray, train_residential_flags: np.ndarray):
         """
@@ -42,6 +49,27 @@ class Model(object):
         """
 
         # TODO: Fit your model here
+
+        X_tr = np.column_stack((train_coordinates, train_residential_flags))
+
+        indici_mescolati = np.random.permutation(len(X_tr))
+        taglio = int(len(X_tr) * 0.8)
+
+        indici_train = indici_mescolati[:taglio]
+        indici_val = indici_mescolati[taglio:]
+
+        X_train, X_val = X_tr[indici_train], X_tr[indici_val]
+        Y_train, Y_val = train_pollution_targets[indici_train], train_pollution_targets[indici_val]
+
+        for kernel in self.kernels:
+            modello = gp(kernel=kernel)
+            
+            mu_prior, sd_prior = modello.predict(X_train, return_std=True)
+
+            modello.fit(X_train, Y_train)
+
+            mu_post, sd_post = modello.predict(X_val, return_std=True)
+        
         pass
 
     # Don't change the name or the signature of this function
@@ -182,6 +210,15 @@ def get_city_area_data(train_x: np.ndarray, test_x: np.ndarray) -> typing.Tuple[
 
     #TODO: Extract the city_area information from the training and test features
 
+    train_x = np.genfromtxt("train_x.csv", delimiter=",", skip_header=1)
+
+    test_x = np.genfromtxt("test_x.csv", delimiter=",", skip_header=1)
+
+    train_coordinates = train_x[:, :2]
+    train_residential_flags = train_x[:, 2]
+    test_coordinates = test_x[:, :2]
+    test_residential_flags = test_x[:, 2]
+
     assert train_coordinates.shape[0] == train_residential_flags.shape[0] and test_coordinates.shape[0] == test_residential_flags.shape[0]
     assert train_coordinates.shape[1] == 2 and test_coordinates.shape[1] == 2
     assert train_residential_flags.ndim == 1 and test_residential_flags.ndim == 1
@@ -205,8 +242,8 @@ def main():
 
     # Predict on the test features
     print('Predicting on test features')
-    predictions = model.predict_pollution(test_coordinates, test_residential_flags)
-    print(predictions)
+    #predictions = model.predict_pollution(test_coordinates, test_residential_flags)
+    #print(predictions)
 
     if EXTENDED_EVALUATION:
         perform_extended_model_evaluation(model, output_dir='.')
