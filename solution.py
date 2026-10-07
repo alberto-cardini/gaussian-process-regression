@@ -209,11 +209,7 @@ def get_city_area_data(train_x: np.ndarray, test_x: np.ndarray) -> typing.Tuple[
     test_residential_flags = np.zeros((test_x.shape[0],), dtype=bool)
 
     #TODO: Extract the city_area information from the training and test features
-
-    train_x = np.genfromtxt("train_x.csv", delimiter=",", skip_header=1)
-
-    test_x = np.genfromtxt("test_x.csv", delimiter=",", skip_header=1)
-
+    
     train_coordinates = train_x[:, :2]
     train_residential_flags = train_x[:, 2]
     test_coordinates = test_x[:, :2]
