@@ -38,6 +38,8 @@ class Model(object):
                    DotProduct(sigma_0=1.0)**2 + WhiteKernel(noise_level=1.0),
                    Matern() + WhiteKernel(noise_level=1.0)
                    ]
+        self.k = 0.0
+        self.modello = None
 
     # Don't change the name or the signature of this function
     def fit_model(self, train_coordinates: np.ndarray, train_pollution_targets: np.ndarray, train_residential_flags: np.ndarray):
@@ -55,7 +57,7 @@ class Model(object):
         indici_mescolati = np.random.permutation(len(X_tr))
         taglio = int(len(X_tr) * 0.8)
 
-        indici_train = indici_mescolati[int(taglio*0.5*0.5):int(taglio*0.5*1.5)]
+        indici_train = indici_mescolati[int(taglio*0.5):taglio]
         indici_val = indici_mescolati[taglio:]
 
         X_train, X_val = X_tr[indici_train], X_tr[indici_val]
@@ -70,22 +72,31 @@ class Model(object):
 
             models.append(modello) # store the trained model in the list of models
 
-        best_model = None         
-        best_cost = float('inf')    
+        valori_k = np.arange(0, 3.01, 0.1)  
+        residenziale = X_val[:, 2] == 1     
+
+        best_model = None
+        best_cost = float('inf')
+        best_k = None
 
         for model in models:
-            mu, sd = model.predict(X_val, return_std=True) # doing predictions on the validation set
-            predizioni = mu # setting the predictions to the mean of the GP posterior (TODO: you can change this if you want to use a different strategy for forming predictions)
-            cost = calculate_cost(Y_val, predizioni, X_val[:, 2]) # calculate the cost of the predictions using the provided cost function
-            if cost < best_cost:
-                best_cost = cost
-                best_model = model
+            mu, sd = model.predict(X_val, return_std=True)   
+
+            for k in valori_k:
+                predizioni = mu.copy()
+                predizioni[residenziale] += k * sd[residenziale]   
+                cost = calculate_cost(Y_val, predizioni, X_val[:, 2])
+
+                if cost < best_cost:
+                    best_cost = cost
+                    best_model = model
+                    best_k = k
+
+        print(f"Miglior kernel: {best_model.kernel_} | k = {best_k:.1f} | costo = {best_cost:.2f}")
                 
-                pass
-
-        print(f"Miglior kernel: {best_model.kernel_}")
-        print(f"Costo di validazione: {best_cost:.2f}")
-
+        self.k = best_k
+        self.modello = best_model
+        pass
         
 
     # Don't change the name or the signature of this function
@@ -100,13 +111,21 @@ class Model(object):
         """
 
         # TODO: Use your GP to estimate the posterior mean and stddev for each city_area here
-        gp_mean = np.zeros(test_coordinates.shape[0], dtype=float)
-        gp_std = np.zeros(test_coordinates.shape[0], dtype=float)
+        #gp_mean = np.zeros(test_coordinates.shape[0], dtype=float)
+        #gp_std = np.zeros(test_coordinates.shape[0], dtype=float)
 
         # TODO: Use the GP posterior to form your predictions here
-        predictions = gp_mean
+        #predictions = gp_mean
+
+        X_test = np.column_stack((test_coordinates, test_residential_flags))
+        gp_mean, gp_std = self.modello.predict(X_test, return_std=True)
+
+        predictions = gp_mean.copy()
+        residenziale = test_residential_flags == 1
+        predictions[residenziale] += self.k * gp_std[residenziale]
 
         return predictions, gp_mean, gp_std
+
 
 # You don't have to change this function
 def calculate_cost(ground_truth: np.ndarray, predictions: np.ndarray, residential_flags: np.ndarray) -> float:
@@ -254,8 +273,8 @@ def main():
 
     # Predict on the test features
     print('Predicting on test features')
-    #predictions = model.predict_pollution(test_coordinates, test_residential_flags)
-    #print(predictions)
+    predictions = model.predict_pollution(test_coordinates, test_residential_flags)
+    print(predictions)
 
     if EXTENDED_EVALUATION:
         perform_extended_model_evaluation(model, output_dir='.')
