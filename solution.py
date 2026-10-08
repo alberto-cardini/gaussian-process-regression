@@ -15,6 +15,73 @@ EVALUATION_GRID_POINTS = 300  # Number of grid points used in extended evaluatio
 COST_W_UNDERPREDICT = 50.0
 COST_W_NORMAL = 1.0
 
+import time
+
+
+def print_progress_bar(current, total, kernel_name, elapsed=None, bar_length=30):
+    """
+    Prints a progress bar for the training of the kernels.
+    """
+    progress = current / total
+    filled = int(bar_length * progress)
+    bar = "█" * filled + "░" * (bar_length - filled)
+
+    elapsed_str = ""
+    if elapsed is not None:
+        elapsed_str = f" | {elapsed:.2f}s"
+
+    print(
+        f"\rTraining kernels | {bar} {progress * 100:6.2f}% "
+        f"| {kernel_name}{elapsed_str}",
+        end="",
+        flush=True
+    )
+
+    if current == total:
+        print()
+
+
+def print_prediction_table(
+    coordinates,
+    residential_flags,
+    predictions,
+    gp_mean,
+    gp_std
+):
+    """
+    Prints GP predictions in a readable table.
+    """
+
+    print("\n" + "=" * 95)
+    print("                           GP PREDICTIONS")
+    print("=" * 95)
+
+    print(
+        f"{'ID':>4} | "
+        f"{'X':>8} {'Y':>8} | "
+        f"{'Residential':>11} | "
+        f"{'GP Mean':>10} | "
+        f"{'GP Std':>10} | "
+        f"{'Prediction':>11}"
+    )
+
+    print("-" * 95)
+
+    for i in range(len(predictions)):
+        residential = "YES" if residential_flags[i] else "NO"
+
+        print(
+            f"{i:4d} | "
+            f"{coordinates[i, 0]:8.4f} "
+            f"{coordinates[i, 1]:8.4f} | "
+            f"{residential:>11} | "
+            f"{gp_mean[i]:10.4f} | "
+            f"{gp_std[i]:10.4f} | "
+            f"{predictions[i]:11.4f}"
+        )
+
+    print("=" * 95)
+
 
 class Model(object):
     """
@@ -42,90 +109,199 @@ class Model(object):
         self.modello = None
 
     # Don't change the name or the signature of this function
-    def fit_model(self, train_coordinates: np.ndarray, train_pollution_targets: np.ndarray, train_residential_flags: np.ndarray):
-        """
-        Fit your model on the given training data.
-        :param train_coordinates: Training features as a 2d NumPy float array of shape (NUM_SAMPLES, 2)
-        :param train_pollution_targets: Training pollution concentrations as a 1d NumPy float array of shape (NUM_SAMPLES,)
-        :param train_residential_flags: Binary variable denoting whether the 2D training point is in the residential area (1) or not (0)
-        """
-
-        # TODO: Fit your model here
-
-        X_tr = np.column_stack((train_coordinates, train_residential_flags))
+    def fit_model(
+        self,
+        train_coordinates: np.ndarray,
+        train_pollution_targets: np.ndarray,
+        train_residential_flags: np.ndarray
+    ):
+        X_tr = np.column_stack(
+            (train_coordinates, train_residential_flags)
+        )
 
         indici_mescolati = np.random.permutation(len(X_tr))
         taglio = int(len(X_tr) * 0.8)
 
-        indici_train = indici_mescolati[int(taglio*0.5):taglio]
+        indici_train = indici_mescolati[int(taglio * 0.5):taglio]
         indici_val = indici_mescolati[taglio:]
 
-        X_train, X_val = X_tr[indici_train], X_tr[indici_val]
-        Y_train, Y_val = train_pollution_targets[indici_train], train_pollution_targets[indici_val]
+        X_train = X_tr[indici_train]
+        X_val = X_tr[indici_val]
+
+        Y_train = train_pollution_targets[indici_train]
+        Y_val = train_pollution_targets[indici_val]
 
         models = []
-        
-        for kernel in self.kernels:
-            modello = gp(kernel=kernel, normalize_y=True)
 
-            modello.fit(X_train, Y_train) #train the model on the training set
+        print("\n" + "=" * 80)
+        print("                         GP TRAINING")
+        print("=" * 80)
+        print(f"Training samples   : {len(X_train)}")
+        print(f"Validation samples : {len(X_val)}")
+        print(f"Kernels to test    : {len(self.kernels)}")
+        print("=" * 80 + "\n")
 
-            models.append(modello) # store the trained model in the list of models
+        total_kernels = len(self.kernels)
 
-        valori_k = np.arange(0, 3.01, 0.1)  
-        residenziale = X_val[:, 2] == 1     
+        for i, kernel in enumerate(self.kernels, start=1):
+
+            kernel_name = str(kernel)
+
+            start_time = time.perf_counter()
+
+            modello = gp(
+                kernel=kernel,
+                normalize_y=True
+            )
+
+            print_progress_bar(
+                i - 1,
+                total_kernels,
+                kernel_name
+            )
+
+            modello.fit(X_train, Y_train)
+
+            elapsed = time.perf_counter() - start_time
+
+            models.append(modello)
+
+            print_progress_bar(
+                i,
+                total_kernels,
+                kernel_name,
+                elapsed
+            )
+
+        print("\nTraining completed.\n")
+
+        valori_k = np.arange(0, 3.01, 0.1)
+        residenziale = X_val[:, 2] == 1
 
         best_model = None
         best_cost = float('inf')
         best_k = None
 
+        results = []
+
         for model in models:
-            mu, sd = model.predict(X_val, return_std=True)   
+
+            mu, sd = model.predict(
+                X_val,
+                return_std=True
+            )
+
+            model_best_cost = float('inf')
+            model_best_k = None
 
             for k in valori_k:
+
                 predizioni = mu.copy()
-                predizioni[residenziale] += k * sd[residenziale]   
-                cost = calculate_cost(Y_val, predizioni, X_val[:, 2])
+
+                predizioni[residenziale] += (
+                    k * sd[residenziale]
+                )
+
+                cost = calculate_cost(
+                    Y_val,
+                    predizioni,
+                    X_val[:, 2]
+                )
+
+                if cost < model_best_cost:
+                    model_best_cost = cost
+                    model_best_k = k
 
                 if cost < best_cost:
                     best_cost = cost
                     best_model = model
                     best_k = k
 
-        print(f"Miglior kernel: {best_model.kernel_} | k = {best_k:.1f} | costo = {best_cost:.2f}")
-                
+            results.append(
+                (
+                    model.kernel_,
+                    model_best_k,
+                    model_best_cost
+                )
+            )
+
+        # ---------------------------------------------------------
+        # Print dei risultati
+        # ---------------------------------------------------------
+
+        print("=" * 90)
+        print("                         MODEL RESULTS")
+        print("=" * 90)
+
+        print(
+            f"{'#':>3} | "
+            f"{'Kernel':<42} | "
+            f"{'Best k':>8} | "
+            f"{'Validation cost':>17}"
+        )
+
+        print("-" * 90)
+
+        for i, (kernel, k, cost) in enumerate(results, start=1):
+
+            kernel_string = str(kernel)
+
+            # Evita che kernel troppo lunghi distruggano la tabella
+            if len(kernel_string) > 42:
+                kernel_string = kernel_string[:39] + "..."
+
+            print(
+                f"{i:3d} | "
+                f"{kernel_string:<42} | "
+                f"{k:8.2f} | "
+                f"{cost:17.4f}"
+            )
+
+        print("-" * 90)
+
+        print(f"BEST MODEL")
+        print(f"Kernel : {best_model.kernel_}")
+        print(f"k      : {best_k:.2f}")
+        print(f"Cost   : {best_cost:.4f}")
+
+        print("=" * 90)
+
         self.k = best_k
         self.modello = best_model
-        pass
-        
 
     # Don't change the name or the signature of this function
-    def predict_pollution(self, test_coordinates: np.ndarray, test_residential_flags: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Predict the pollution concentration for a given set of city_areas.
-        :param test_coordinates: city_areas as a 2d NumPy float array of shape (NUM_SAMPLES, 2)
-        :param test_residential_flags: city_area info for every sample in a form of a bool array (NUM_SAMPLES,)
-        :return:
-            Tuple of three 1d NumPy float arrays, each of shape (NUM_SAMPLES,),
-            containing your predictions, the GP posterior mean, and the GP posterior stddev (in that order)
-        """
+    def predict_pollution(
+        self,
+        test_coordinates: np.ndarray,
+        test_residential_flags: np.ndarray
+    ) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-        # TODO: Use your GP to estimate the posterior mean and stddev for each city_area here
-        #gp_mean = np.zeros(test_coordinates.shape[0], dtype=float)
-        #gp_std = np.zeros(test_coordinates.shape[0], dtype=float)
+        X_test = np.column_stack(
+            (test_coordinates, test_residential_flags)
+        )
 
-        # TODO: Use the GP posterior to form your predictions here
-        #predictions = gp_mean
-
-        X_test = np.column_stack((test_coordinates, test_residential_flags))
-        gp_mean, gp_std = self.modello.predict(X_test, return_std=True)
+        gp_mean, gp_std = self.modello.predict(
+            X_test,
+            return_std=True
+        )
 
         predictions = gp_mean.copy()
+
         residenziale = test_residential_flags == 1
-        predictions[residenziale] += self.k * gp_std[residenziale]
+
+        predictions[residenziale] += (
+            self.k * gp_std[residenziale]
+        )
+
+        print_prediction_table(
+            test_coordinates,
+            test_residential_flags,
+            predictions,
+            gp_mean,
+            gp_std
+        )
 
         return predictions, gp_mean, gp_std
-
 
 # You don't have to change this function
 def calculate_cost(ground_truth: np.ndarray, predictions: np.ndarray, residential_flags: np.ndarray) -> float:
