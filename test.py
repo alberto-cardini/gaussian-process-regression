@@ -51,7 +51,7 @@ test_coordinates, test_residential_flags = get_city_area_data(
 # train_y                 -> pollution
 # ============================================================
 
-X = train_coordinates[:, [0]]
+X = train_x
 y = train_y
 
 
@@ -179,14 +179,6 @@ plt.plot(
 
 
 # Training observations
-plt.scatter(
-    X_train.ravel(),
-    y_train_noisy,
-    color="black",
-    s=70,
-    zorder=3,
-    label="Training observations"
-)
 
 
 # ============================================================

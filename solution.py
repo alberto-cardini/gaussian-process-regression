@@ -33,10 +33,10 @@ class Model(object):
         # TODO: Add custom initialization for your model here if necessary
 
         self.kernels = [RBF() + WhiteKernel(noise_level=1.0),
-                   RationalQuadratic()+WhiteKernel(noise_level=1.0),
-                   ExpSineSquared(periodicity=10.0)+WhiteKernel(noise_level=1.0),
-                   DotProduct(sigma_0=1.0)**2+WhiteKernel(noise_level=1.0),
-                   Matern()+WhiteKernel(noise_level=1.0)
+                   RationalQuadratic() + WhiteKernel(noise_level=1.0),
+                   ExpSineSquared(periodicity=10.0) + WhiteKernel(noise_level=1.0),
+                   DotProduct(sigma_0=1.0)**2 + WhiteKernel(noise_level=1.0),
+                   Matern() + WhiteKernel(noise_level=1.0)
                    ]
 
     # Don't change the name or the signature of this function
@@ -55,22 +55,38 @@ class Model(object):
         indici_mescolati = np.random.permutation(len(X_tr))
         taglio = int(len(X_tr) * 0.8)
 
-        indici_train = indici_mescolati[:taglio]
+        indici_train = indici_mescolati[int(taglio*0.5*0.5):int(taglio*0.5*1.5)]
         indici_val = indici_mescolati[taglio:]
 
         X_train, X_val = X_tr[indici_train], X_tr[indici_val]
         Y_train, Y_val = train_pollution_targets[indici_train], train_pollution_targets[indici_val]
 
-        for kernel in self.kernels:
-            modello = gp(kernel=kernel)
-            
-            mu_prior, sd_prior = modello.predict(X_train, return_std=True)
-
-            modello.fit(X_train, Y_train)
-
-            mu_post, sd_post = modello.predict(X_val, return_std=True)
+        models = []
         
-        pass
+        for kernel in self.kernels:
+            modello = gp(kernel=kernel, normalize_y=True)
+
+            modello.fit(X_train, Y_train) #train the model on the training set
+
+            models.append(modello) # store the trained model in the list of models
+
+        best_model = None         
+        best_cost = float('inf')    
+
+        for model in models:
+            mu, sd = model.predict(X_val, return_std=True) # doing predictions on the validation set
+            predizioni = mu # setting the predictions to the mean of the GP posterior (TODO: you can change this if you want to use a different strategy for forming predictions)
+            cost = calculate_cost(Y_val, predizioni, X_val[:, 2]) # calculate the cost of the predictions using the provided cost function
+            if cost < best_cost:
+                best_cost = cost
+                best_model = model
+                
+                pass
+
+        print(f"Miglior kernel: {best_model.kernel_}")
+        print(f"Costo di validazione: {best_cost:.2f}")
+
+        
 
     # Don't change the name or the signature of this function
     def predict_pollution(self, test_coordinates: np.ndarray, test_residential_flags: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -209,7 +225,7 @@ def get_city_area_data(train_x: np.ndarray, test_x: np.ndarray) -> typing.Tuple[
     test_residential_flags = np.zeros((test_x.shape[0],), dtype=bool)
 
     #TODO: Extract the city_area information from the training and test features
-    
+
     train_coordinates = train_x[:, :2]
     train_residential_flags = train_x[:, 2]
     test_coordinates = test_x[:, :2]
