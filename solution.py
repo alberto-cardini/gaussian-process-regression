@@ -1,5 +1,7 @@
 import os
 import typing
+import pickle
+import time
 from sklearn.gaussian_process.kernels import *
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor as gp
@@ -14,8 +16,6 @@ EVALUATION_GRID_POINTS = 300  # Number of grid points used in extended evaluatio
 # Cost function constants
 COST_W_UNDERPREDICT = 50.0
 COST_W_NORMAL = 1.0
-
-import time
 
 
 def print_progress_bar(current, total, kernel_name, elapsed=None, bar_length=30):
@@ -97,8 +97,6 @@ class Model(object):
         """
         self.rng = np.random.default_rng(seed=0)
 
-        # TODO: Add custom initialization for your model here if necessary
-
         self.kernels = [RBF() + WhiteKernel(noise_level=1.0),
                    RationalQuadratic() + WhiteKernel(noise_level=1.0),
                    ExpSineSquared(periodicity=10.0) + WhiteKernel(noise_level=1.0),
@@ -107,6 +105,24 @@ class Model(object):
                    ]
         self.k = 0.0
         self.modello = None
+
+    def save_model(self, filepath: str = 'trained_model.pkl'):
+        """
+        Salva il modello addestrato e il parametro k su file.
+        """
+        with open(filepath, 'wb') as f:
+            pickle.dump({'modello': self.modello, 'k': self.k}, f)
+        print(f"\n[INFO] Modello salvato con successo in '{filepath}'")
+
+    def load_model(self, filepath: str = 'trained_model.pkl'):
+        """
+        Carica un modello addestrato da file.
+        """
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+            self.modello = data['modello']
+            self.k = data['k']
+        print(f"\n[INFO] Modello caricato con successo da '{filepath}'")
 
     # Don't change the name or the signature of this function
     def fit_model(
@@ -225,10 +241,6 @@ class Model(object):
                 )
             )
 
-        # ---------------------------------------------------------
-        # Print dei risultati
-        # ---------------------------------------------------------
-
         print("=" * 90)
         print("                         MODEL RESULTS")
         print("=" * 90)
@@ -246,7 +258,6 @@ class Model(object):
 
             kernel_string = str(kernel)
 
-            # Evita che kernel troppo lunghi distruggano la tabella
             if len(kernel_string) > 42:
                 kernel_string = kernel_string[:39] + "..."
 
@@ -268,6 +279,9 @@ class Model(object):
 
         self.k = best_k
         self.modello = best_model
+
+        # Salvataggio automatico del modello al termine dell'addestramento
+        self.save_model('trained_model.pkl')
 
     # Don't change the name or the signature of this function
     def predict_pollution(
@@ -303,48 +317,24 @@ class Model(object):
 
         return predictions, gp_mean, gp_std
 
-# You don't have to change this function
-def calculate_cost(ground_truth: np.ndarray, predictions: np.ndarray, residential_flags: np.ndarray) -> float:
-    """
-    Calculates the cost of a set of predictions.
 
-    :param ground_truth: Ground truth pollution levels as a 1d NumPy float array
-    :param predictions: Predicted pollution levels as a 1d NumPy float array
-    :param residential_flags: city_area info for every sample in a form of a bool array (NUM_SAMPLES,)
-    :return: Total cost of all predictions as a single float
-    """
+def calculate_cost(ground_truth: np.ndarray, predictions: np.ndarray, residential_flags: np.ndarray) -> float:
     assert ground_truth.ndim == 1 and predictions.ndim == 1 and ground_truth.shape == predictions.shape
 
-    # Unweighted cost
     cost = (ground_truth - predictions) ** 2
     weights = np.ones_like(cost) * COST_W_NORMAL
 
-    # Case i): underprediction
     mask = (predictions < ground_truth) & [bool(residential_flag) for residential_flag in residential_flags]
     weights[mask] = COST_W_UNDERPREDICT
 
-    # Weigh the cost and return the average
     return np.mean(cost * weights)
 
 
-# You don't have to change this function
 def is_inside_circle(coordinate, circle_parameters):
-    """
-    Checks if a coordinate is inside a circle.
-    :param coordinate: 2D coordinate
-    :param circle_parameters: 3D coordinate of the circle center and its radius
-    :return: True if the coordinate is inside the circle, False otherwise
-    """
     return (coordinate[0] - circle_parameters[0])**2 + (coordinate[1] - circle_parameters[1])**2 < circle_parameters[2]**2
 
-# You don't have to change this function
+
 def determine_residential_flags(grid_coordinates):
-    """
-    Determines the city_area index for each coordinate in the visualization grid.
-    :param grid_coordinates: 2D coordinates of the visualization grid
-    :return: 1D array of city_area indexes
-    """
-    # Circles coordinates
     circles = np.array([[0.5488135, 0.71518937, 0.17167342],
                     [0.79915856, 0.46147936, 0.1567626 ],
                     [0.26455561, 0.77423369, 0.10298338],
@@ -368,16 +358,10 @@ def determine_residential_flags(grid_coordinates):
 
     return residential_flags
 
-# Don't change the name or the signature of this function
-def perform_extended_model_evaluation(model: Model, output_dir: str = '/results'):
-    """
-    Visualizes the predictions of a fitted model.
-    :param model: Fitted model to be visualized
-    :param output_dir: Directory in which the visualizations will be stored
-    """
+
+def perform_extended_model_evaluation(model: Model, output_dir: str = '.'):
     print('Performing extended evaluation')
 
-    # Visualize on a uniform grid over the entire coordinate system
     grid_lat, grid_lon = np.meshgrid(
         np.linspace(0, EVALUATION_GRID_POINTS - 1, num=EVALUATION_GRID_POINTS) / EVALUATION_GRID_POINTS,
         np.linspace(0, EVALUATION_GRID_POINTS - 1, num=EVALUATION_GRID_POINTS) / EVALUATION_GRID_POINTS,
@@ -385,42 +369,25 @@ def perform_extended_model_evaluation(model: Model, output_dir: str = '/results'
     visualization_grid = np.stack((grid_lon.flatten(), grid_lat.flatten()), axis=1)
     grid_residential_flags = determine_residential_flags(visualization_grid)
 
-    # Obtain predictions, means, and stddevs over the entire map
     predictions, gp_mean, gp_stddev = model.predict_pollution(visualization_grid, grid_residential_flags)
     predictions = np.reshape(predictions, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
     gp_mean = np.reshape(gp_mean, (EVALUATION_GRID_POINTS, EVALUATION_GRID_POINTS))
 
     vmin, vmax = 0.0, 65.0
 
-    # Plot the actual predictions
     fig, ax = plt.subplots()
     ax.set_title('Extended visualization of task 1')
     im = ax.imshow(predictions, vmin=vmin, vmax=vmax)
     cbar = fig.colorbar(im, ax=ax)
 
-    # Save figure to pdf
     figure_path = os.path.join(output_dir, 'extended_evaluation.pdf')
     fig.savefig(figure_path)
     print(f'Saved extended evaluation to {figure_path}')
 
     plt.show()
 
-# You do not need to change the name or the signature of this function; convenience helper used by main() 
+
 def get_city_area_data(train_x: np.ndarray, test_x: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Extracts the city_area information from the training and test features.
-    :param train_x: Training features
-    :param test_x: Test features
-    :return: Tuple of (training features' 2D coordinates, training features' city_area information,
-        test features' 2D coordinates, test features' city_area information)
-    """
-    train_coordinates = np.zeros((train_x.shape[0], 2), dtype=float)
-    train_residential_flags = np.zeros((train_x.shape[0],), dtype=bool)
-    test_coordinates = np.zeros((test_x.shape[0], 2), dtype=float)
-    test_residential_flags = np.zeros((test_x.shape[0],), dtype=bool)
-
-    #TODO: Extract the city_area information from the training and test features
-
     train_coordinates = train_x[:, :2]
     train_residential_flags = train_x[:, 2]
     test_coordinates = test_x[:, :2]
@@ -432,7 +399,7 @@ def get_city_area_data(train_x: np.ndarray, test_x: np.ndarray) -> typing.Tuple[
 
     return train_coordinates, train_residential_flags, test_coordinates, test_residential_flags
 
-# you don't have to change this function
+
 def main():
     # Load the training dataset and test features
     train_x = np.loadtxt('train_x.csv', delimiter=',', skiprows=1)
@@ -450,7 +417,6 @@ def main():
     # Predict on the test features
     print('Predicting on test features')
     predictions = model.predict_pollution(test_coordinates, test_residential_flags)
-    print(predictions)
 
     if EXTENDED_EVALUATION:
         perform_extended_model_evaluation(model, output_dir='.')
