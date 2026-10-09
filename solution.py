@@ -41,48 +41,6 @@ def print_progress_bar(current, total, kernel_name, elapsed=None, bar_length=30)
         print()
 
 
-def print_prediction_table(
-    coordinates,
-    residential_flags,
-    predictions,
-    gp_mean,
-    gp_std
-):
-    """
-    Prints GP predictions in a readable table.
-    """
-
-    print("\n" + "=" * 95)
-    print("                           GP PREDICTIONS")
-    print("=" * 95)
-
-    print(
-        f"{'ID':>4} | "
-        f"{'X':>8} {'Y':>8} | "
-        f"{'Residential':>11} | "
-        f"{'GP Mean':>10} | "
-        f"{'GP Std':>10} | "
-        f"{'Prediction':>11}"
-    )
-
-    print("-" * 95)
-
-    for i in range(len(predictions)):
-        residential = "YES" if residential_flags[i] else "NO"
-
-        print(
-            f"{i:4d} | "
-            f"{coordinates[i, 0]:8.4f} "
-            f"{coordinates[i, 1]:8.4f} | "
-            f"{residential:>11} | "
-            f"{gp_mean[i]:10.4f} | "
-            f"{gp_std[i]:10.4f} | "
-            f"{predictions[i]:11.4f}"
-        )
-
-    print("=" * 95)
-
-
 class Model(object):
     """
     Model for this task.
@@ -97,14 +55,15 @@ class Model(object):
         """
         self.rng = np.random.default_rng(seed=0)
 
-        self.kernels = [RBF() + WhiteKernel(noise_level=1.0),
+        self.kernels = [#RBF() + WhiteKernel(noise_level=1.0),
                    RationalQuadratic() + WhiteKernel(noise_level=1.0),
-                   ExpSineSquared(periodicity=10.0) + WhiteKernel(noise_level=1.0),
-                   DotProduct(sigma_0=1.0)**2 + WhiteKernel(noise_level=1.0),
+                   #ExpSineSquared(periodicity=10.0) + WhiteKernel(noise_level=1.0),
+                   #DotProduct(sigma_0=1.0)**2 + WhiteKernel(noise_level=1.0),
                    Matern() + WhiteKernel(noise_level=1.0)
                    ]
         self.k = 0.0
         self.modello = None
+        #self.best_model = self.load_model('trained_model_best.pkl') if os.path.exists('trained_model_best.pkl') else None
 
     def save_model(self, filepath: str = 'trained_model.pkl'):
         """
@@ -136,9 +95,9 @@ class Model(object):
         )
 
         indici_mescolati = np.random.permutation(len(X_tr))
-        taglio = int(len(X_tr) * 0.8)
+        taglio = int(len(X_tr) * 0.9)
 
-        indici_train = indici_mescolati[int(taglio * 0.5):taglio]
+        indici_train = indici_mescolati[:int(taglio * 0.5)]
         indici_val = indici_mescolati[taglio:]
 
         X_train = X_tr[indici_train]
@@ -165,9 +124,11 @@ class Model(object):
 
             start_time = time.perf_counter()
 
+
             modello = gp(
                 kernel=kernel,
-                normalize_y=True
+                normalize_y=True,
+                n_restarts_optimizer=3
             )
 
             print_progress_bar(
@@ -241,6 +202,30 @@ class Model(object):
                 )
             )
 
+        #mu_best, sd_best = best_model.predict(
+        #    X_train,
+        #    return_std=True
+        #)
+
+        #predictions_best = mu_best.copy()
+
+        #predictions_best[residenziale] += (
+        #    best_k * sd_best[residenziale]
+        #)
+
+        #cost_pretrained = calculate_cost(
+        #            Y_val,
+        #            predictions_best,
+        #            X_val[:, 2]
+        #        )
+        
+        #if cost_pretrained > best_cost + 0.5:
+        #    print(f"\n[INFO] Il modello migliore ha un costo maggiore di {cost_pretrained - best_cost:.4f}. Utilizzo del modello corrente.")
+        #    self.best_model = self.modello
+        #    self.save_model('trained_model_best.pkl')
+        #else:
+        #    self.modello = self.best_model
+
         print("=" * 90)
         print("                         MODEL RESULTS")
         print("=" * 90)
@@ -281,7 +266,7 @@ class Model(object):
         self.modello = best_model
 
         # Salvataggio automatico del modello al termine dell'addestramento
-        self.save_model('trained_model.pkl')
+        self.save_model('trained_model_new.pkl')
 
     # Don't change the name or the signature of this function
     def predict_pollution(
@@ -299,20 +284,17 @@ class Model(object):
             return_std=True
         )
 
+        #gp_mean_best, gp_std_best = self.best_model.predict(
+        #    X_test,
+        #    return_std=True
+        #)
+
         predictions = gp_mean.copy()
 
         residenziale = test_residential_flags == 1
 
         predictions[residenziale] += (
             self.k * gp_std[residenziale]
-        )
-
-        print_prediction_table(
-            test_coordinates,
-            test_residential_flags,
-            predictions,
-            gp_mean,
-            gp_std
         )
 
         return predictions, gp_mean, gp_std

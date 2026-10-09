@@ -1,0 +1,19 @@
+==========================================================================================
+                         MODEL RESULTS
+==========================================================================================
+  # | Kernel                                     |   Best k |   Validation cost
+------------------------------------------------------------------------------------------
+  1 | RBF(length_scale=0.0237) + WhiteKernel(... |     1.40 |           18.2821
+  2 | RationalQuadratic(alpha=0.287, length_s... |     1.40 |           14.2559
+  3 | ExpSineSquared(length_scale=1, periodic... |     1.10 |          498.2791
+  4 | DotProduct(sigma_0=1) ** 2 + WhiteKerne... |     1.00 |          494.6000
+  5 | Matern(length_scale=0.0518, nu=1.5) + W... |     1.30 |           14.4242
+------------------------------------------------------------------------------------------
+BEST MODEL
+Kernel : RationalQuadratic(alpha=0.287, length_scale=0.0352) + WhiteKernel(noise_level=0.00634)
+k      : 1.40
+Cost   : 14.2559
+
+Congratulations, you beat the baseline in terms of public cost. Your public cost is 10.221
+Dumped check file to /results/results_check.byte
+Performing extended evaluation
