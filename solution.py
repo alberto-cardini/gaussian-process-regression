@@ -1,17 +1,17 @@
 import os
 import typing
-import pickle
 import time
-from sklearn.gaussian_process.kernels import *
+
 import numpy as np
-from sklearn.gaussian_process import GaussianProcessRegressor as gp
 import matplotlib.pyplot as plt
-from matplotlib import cm
+
+from sklearn.gaussian_process import GaussianProcessRegressor as gp
+from sklearn.gaussian_process.kernels import *
 
 
-# Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
+# Set to True to visualize predictions
 EXTENDED_EVALUATION = True
-EVALUATION_GRID_POINTS = 300  # Number of grid points used in extended evaluation
+EVALUATION_GRID_POINTS = 300
 
 # Cost function constants
 COST_W_UNDERPREDICT = 50.0
@@ -42,46 +42,17 @@ def print_progress_bar(current, total, kernel_name, elapsed=None, bar_length=30)
 
 
 class Model(object):
-    """
-    Model for this task.
-    You need to implement the fit_model and predict_pollution methods
-    without changing their signatures, but are allowed to create additional methods.
-    """
 
     def __init__(self):
-        """
-        Initialize your model here.
-        We already provide a random number generator for reproducibility.
-        """
         self.rng = np.random.default_rng(seed=0)
 
-        self.kernels = [#RBF() + WhiteKernel(noise_level=1.0),
-                   RationalQuadratic() + WhiteKernel(noise_level=1.0),
-                   #ExpSineSquared(periodicity=10.0) + WhiteKernel(noise_level=1.0),
-                   #DotProduct(sigma_0=1.0)**2 + WhiteKernel(noise_level=1.0),
-                   Matern() + WhiteKernel(noise_level=1.0)
-                   ]
+        self.kernels = [
+            RationalQuadratic() + WhiteKernel(noise_level=1.0),
+            Matern() + WhiteKernel(noise_level=1.0)
+        ]
+
         self.k = 0.0
         self.modello = None
-        #self.best_model = self.load_model('trained_model_best.pkl') if os.path.exists('trained_model_best.pkl') else None
-
-    def save_model(self, filepath: str = 'trained_model.pkl'):
-        """
-        Salva il modello addestrato e il parametro k su file.
-        """
-        with open(filepath, 'wb') as f:
-            pickle.dump({'modello': self.modello, 'k': self.k}, f)
-        print(f"\n[INFO] Modello salvato con successo in '{filepath}'")
-
-    def load_model(self, filepath: str = 'trained_model.pkl'):
-        """
-        Carica un modello addestrato da file.
-        """
-        with open(filepath, 'rb') as f:
-            data = pickle.load(f)
-            self.modello = data['modello']
-            self.k = data['k']
-        print(f"\n[INFO] Modello caricato con successo da '{filepath}'")
 
     # Don't change the name or the signature of this function
     def fit_model(
@@ -90,14 +61,18 @@ class Model(object):
         train_pollution_targets: np.ndarray,
         train_residential_flags: np.ndarray
     ):
+
         X_tr = np.column_stack(
             (train_coordinates, train_residential_flags)
         )
 
-        indici_mescolati = np.random.permutation(len(X_tr))
+        # Shuffle dataset (reproducible)
+        indici_mescolati = self.rng.permutation(len(X_tr))
+
+        # 90% training, 10% validation
         taglio = int(len(X_tr) * 0.9)
 
-        indici_train = indici_mescolati[:int(taglio * 0.5)]
+        indici_train = indici_mescolati[:taglio]
         indici_val = indici_mescolati[taglio:]
 
         X_train = X_tr[indici_train]
@@ -118,12 +93,14 @@ class Model(object):
 
         total_kernels = len(self.kernels)
 
+        # --------------------------------------------------
+        # TRAINING
+        # --------------------------------------------------
+
         for i, kernel in enumerate(self.kernels, start=1):
 
             kernel_name = str(kernel)
-
             start_time = time.perf_counter()
-
 
             modello = gp(
                 kernel=kernel,
@@ -151,6 +128,10 @@ class Model(object):
             )
 
         print("\nTraining completed.\n")
+
+        # --------------------------------------------------
+        # VALIDATION AND K OPTIMIZATION
+        # --------------------------------------------------
 
         valori_k = np.arange(0, 3.01, 0.1)
         residenziale = X_val[:, 2] == 1
@@ -202,29 +183,9 @@ class Model(object):
                 )
             )
 
-        #mu_best, sd_best = best_model.predict(
-        #    X_train,
-        #    return_std=True
-        #)
-
-        #predictions_best = mu_best.copy()
-
-        #predictions_best[residenziale] += (
-        #    best_k * sd_best[residenziale]
-        #)
-
-        #cost_pretrained = calculate_cost(
-        #            Y_val,
-        #            predictions_best,
-        #            X_val[:, 2]
-        #        )
-        
-        #if cost_pretrained > best_cost + 0.5:
-        #    print(f"\n[INFO] Il modello migliore ha un costo maggiore di {cost_pretrained - best_cost:.4f}. Utilizzo del modello corrente.")
-        #    self.best_model = self.modello
-        #    self.save_model('trained_model_best.pkl')
-        #else:
-        #    self.modello = self.best_model
+        # --------------------------------------------------
+        # RESULTS
+        # --------------------------------------------------
 
         print("=" * 90)
         print("                         MODEL RESULTS")
@@ -255,7 +216,7 @@ class Model(object):
 
         print("-" * 90)
 
-        print(f"BEST MODEL")
+        print("BEST MODEL")
         print(f"Kernel : {best_model.kernel_}")
         print(f"k      : {best_k:.2f}")
         print(f"Cost   : {best_cost:.4f}")
@@ -264,9 +225,6 @@ class Model(object):
 
         self.k = best_k
         self.modello = best_model
-
-        # Salvataggio automatico del modello al termine dell'addestramento
-        self.save_model('trained_model_new.pkl')
 
     # Don't change the name or the signature of this function
     def predict_pollution(
@@ -283,11 +241,6 @@ class Model(object):
             X_test,
             return_std=True
         )
-
-        #gp_mean_best, gp_std_best = self.best_model.predict(
-        #    X_test,
-        #    return_std=True
-        #)
 
         predictions = gp_mean.copy()
 
@@ -358,12 +311,20 @@ def perform_extended_model_evaluation(model: Model, output_dir: str = '.'):
     vmin, vmax = 0.0, 65.0
 
     fig, ax = plt.subplots()
+
     ax.set_title('Extended visualization of task 1')
+
     im = ax.imshow(predictions, vmin=vmin, vmax=vmax)
+
     cbar = fig.colorbar(im, ax=ax)
 
-    figure_path = os.path.join(output_dir, 'extended_evaluation.pdf')
+    figure_path = os.path.join(
+        output_dir,
+        'extended_evaluation.pdf'
+    )
+
     fig.savefig(figure_path)
+
     print(f'Saved extended evaluation to {figure_path}')
 
     plt.show()
@@ -372,6 +333,7 @@ def perform_extended_model_evaluation(model: Model, output_dir: str = '.'):
 def get_city_area_data(train_x: np.ndarray, test_x: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     train_coordinates = train_x[:, :2]
     train_residential_flags = train_x[:, 2]
+
     test_coordinates = test_x[:, :2]
     test_residential_flags = test_x[:, 2]
 
@@ -391,12 +353,13 @@ def main():
     # Extract the city_area information
     train_coordinates, train_residential_flags, test_coordinates, test_residential_flags = get_city_area_data(train_x, test_x)
 
-    # Fit the model
+    # Fit model
     print('Training model')
+
     model = Model()
     model.fit_model(train_coordinates, train_y, train_residential_flags)
 
-    # Predict on the test features
+    # Predict test features
     print('Predicting on test features')
     predictions = model.predict_pollution(test_coordinates, test_residential_flags)
 
