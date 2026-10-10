@@ -43,18 +43,37 @@ def print_progress_bar(current, total, kernel_name, elapsed=None, bar_length=30)
 
 class Model(object):
 
+    
     def __init__(self):
         self.rng = np.random.default_rng(seed=0)
 
         self.kernels = [
-            RationalQuadratic() + WhiteKernel(noise_level=1.0),
-            Matern() + WhiteKernel(noise_level=1.0)
+
+            # 2. Matern rescaled + White noise
+            ConstantKernel(1.0, (1e-2, 1e3))
+            * Matern(nu=1.5)
+            + WhiteKernel(noise_level=1.0),
+
+            # 3. Matern + Rational Quadratic
+            ConstantKernel(1.0, (1e-2, 1e3))
+            * Matern(nu=2.5)
+            + RationalQuadratic()
+            + WhiteKernel(noise_level=1.0),
+
+            # 4. Multiscale RBF
+            ConstantKernel(1.0, (1e-2, 1e3))
+            * RBF(length_scale=0.1)
+            + ConstantKernel(1.0, (1e-2, 1e3))
+            * RBF(length_scale=1.0)
+            + WhiteKernel(noise_level=1.0)
         ]
 
         self.k = 0.0
         self.modello = None
 
+
     # Don't change the name or the signature of this function
+    
     def fit_model(
         self,
         train_coordinates: np.ndarray,
@@ -66,14 +85,23 @@ class Model(object):
             (train_coordinates, train_residential_flags)
         )
 
-        # Shuffle dataset (reproducible)
+        # -----------------------------------------
+        # DATASET SUBSAMPLING
+        # -----------------------------------------
+
+        DATASET_FRACTION = 0.7
+
         indici_mescolati = self.rng.permutation(len(X_tr))
 
-        # 90% training, 10% validation
-        taglio = int(len(X_tr) * 0.9)
+        n_samples = int(len(X_tr) * DATASET_FRACTION)
 
-        indici_train = indici_mescolati[:taglio]
-        indici_val = indici_mescolati[taglio:]
+        indici_selezionati = indici_mescolati[:n_samples]
+
+        # 90% training, 10% validation
+        taglio = int(n_samples * 0.95)
+
+        indici_train = indici_selezionati[:taglio]
+        indici_val = indici_selezionati[taglio:]
 
         X_train = X_tr[indici_train]
         X_val = X_tr[indici_val]
@@ -86,16 +114,18 @@ class Model(object):
         print("\n" + "=" * 80)
         print("                         GP TRAINING")
         print("=" * 80)
-        print(f"Training samples   : {len(X_train)}")
-        print(f"Validation samples : {len(X_val)}")
-        print(f"Kernels to test    : {len(self.kernels)}")
+        print(f"Total dataset     : {len(X_tr)}")
+        print(f"Dataset fraction  : {DATASET_FRACTION * 100:.0f}%")
+        print(f"Training samples  : {len(X_train)}")
+        print(f"Validation samples: {len(X_val)}")
+        print(f"Kernels to test   : {len(self.kernels)}")
         print("=" * 80 + "\n")
 
-        total_kernels = len(self.kernels)
+        # -----------------------------------------
+        # KERNEL TRAINING
+        # -----------------------------------------
 
-        # --------------------------------------------------
-        # TRAINING
-        # --------------------------------------------------
+        total_kernels = len(self.kernels)
 
         for i, kernel in enumerate(self.kernels, start=1):
 
@@ -105,7 +135,7 @@ class Model(object):
             modello = gp(
                 kernel=kernel,
                 normalize_y=True,
-                n_restarts_optimizer=3
+                n_restarts_optimizer=0
             )
 
             print_progress_bar(
@@ -129,9 +159,9 @@ class Model(object):
 
         print("\nTraining completed.\n")
 
-        # --------------------------------------------------
+        # -----------------------------------------
         # VALIDATION AND K OPTIMIZATION
-        # --------------------------------------------------
+        # -----------------------------------------
 
         valori_k = np.arange(0, 3.01, 0.1)
         residenziale = X_val[:, 2] == 1
@@ -183,9 +213,9 @@ class Model(object):
                 )
             )
 
-        # --------------------------------------------------
+        # -----------------------------------------
         # RESULTS
-        # --------------------------------------------------
+        # -----------------------------------------
 
         print("=" * 90)
         print("                         MODEL RESULTS")
@@ -225,6 +255,7 @@ class Model(object):
 
         self.k = best_k
         self.modello = best_model
+
 
     # Don't change the name or the signature of this function
     def predict_pollution(
