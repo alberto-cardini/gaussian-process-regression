@@ -38,61 +38,30 @@ class Model(object):
         # Ogni GP viene fittato sui punti della sua zona allargata di 0.03 per lato.
         self.tile_margin = 0.03
 
-        # --- Kernel candidati per ogni zona:
-        #   "matern15", "matern05" : un solo Matern
-        #   "multiscale_matern"    : Matern 1.5 a length scale bassa + Matern 1.5 a length scale alta
-        #   "multiscale_rbf"       : RBF a length scale bassa + RBF a length scale alta
-        self.kernel_candidates = ("matern15", "matern05", "multiscale_matern")
-
-        # --- Come si sceglie il kernel in ogni zona:
-        #   "cv_cost"          : cross-validation a 5 fold sulla zona, misurando il COSTO DEL TASK
-        #                        (media + margine + 50x sulle sottostime residenziali)
-        #   "bic"              : marginal likelihood penalizzata per il numero di iperparametri
-        #   "aic"              : come bic, con penalita' piu' leggera
-        #   "average_uniform"  : nessuna scelta, media delle previsioni di tutti i candidati
-        #   "average_evidence" : media pesata con la marginal likelihood di ogni candidato
-        self.selection_method = "cv_cost"
+        # --- Kernel candidati per ogni zona; si sceglie con una cross-validation a 5 fold
+        # che misura il costo del task.
+        #   "matern15" : Matern 1.5
+        #   "matern05" : Matern 0.5, piu' ruvido
+        self.kernel_candidates = ("matern15", "matern05")
         self.cv_folds = 5
-        # In cross-validation le etichette hanno rumore di misura (il test no): per valutarle
-        # in modo coerente il margine include tutto il rumore (frazione 1.0).
+        # Le etichette di validazione hanno rumore di misura (il test no): in cross-validation
+        # il margine include tutto il rumore.
         self.cv_noise_fraction = 1.0
 
         # Limiti degli iperparametri (relativi ai target normalizzati della zona).
         self.length_scale_bounds = (5e-3, 1.0)
         self.amplitude_bounds = (1e-2, 1e3)
         self.noise_bounds = (1e-4, 1.0)
-        # Kernel multiscala: la componente corta segue le variazioni locali, quella lunga
-        # l'andamento di fondo della zona. I limiti separano le due scale.
-        self.short_scale_init, self.short_scale_bounds = 0.03, (5e-3, 0.1)
-        self.long_scale_init, self.long_scale_bounds = 0.5, (0.1, 10.0)
 
         # --- Regola di decisione (solo per i punti residenziali, dove sottostimare costa 50x).
+        # Margine = k * sqrt(varianza latente + frazione * rumore), piu' un extra vicino al confine.
         self.test_noise_fraction = 0.35
         self.k = 0.925
         self.border_width = 0.0118
         self.border_k = 0.85
 
-        # Cerchi delle zone residenziali (gli stessi di determine_residential_flags).
-        self.circles = np.array([[0.5488135, 0.71518937, 0.17167342],
-                                 [0.79915856, 0.46147936, 0.1567626 ],
-                                 [0.26455561, 0.77423369, 0.10298338],
-                                 [0.6976312,  0.06022547, 0.04015634],
-                                 [0.31542835, 0.36371077, 0.17985623],
-                                 [0.15896958, 0.11037514, 0.07244247],
-                                 [0.82099323, 0.09710128, 0.08136552],
-                                 [0.41426299, 0.0641475,  0.04442035],
-                                 [0.09394051, 0.5759465,  0.08729856],
-                                 [0.84640867, 0.69947928, 0.04568374],
-                                 [0.23789282, 0.934214,   0.04039037],
-                                 [0.82076712, 0.90884372, 0.07434012],
-                                 [0.09961493, 0.94530153, 0.04755969],
-                                 [0.88172021, 0.2724369,  0.04483477],
-                                 [0.9425836,  0.6339977,  0.04979664]])
-
-        def decide(mean, std, noise_var, flags, coordinates, noise_fraction=None):
+        def decide(mean, std, noise_var, flags, coordinates, noise_fraction):
             # Regola di decisione, usata sia nella previsione sia nella cross-validation.
-            # noise_fraction: quanta parte del rumore entra nel margine (default: quella del test).
-            fraction = self.test_noise_fraction if noise_fraction is None else noise_fraction
             predictions = mean.copy()
             residential = np.asarray(flags) == 1
             if not residential.any():
@@ -100,22 +69,23 @@ class Model(object):
             noise = noise_var[residential]
             # Varianza del campo latente (senza rumore) + una frazione del rumore.
             latent_var = np.maximum(std[residential] ** 2 - noise, 0.0)
-            variance = latent_var + fraction * noise
+            variance = latent_var + noise_fraction * noise
             shift = self.k * np.sqrt(variance)
-            # Profondita' del punto dentro la sua zona residenziale: raggio - distanza dal centro.
+            # Punto sul bordo: spostandolo di border_width in almeno una delle 16 direzioni
+            # esce dalla zona residenziale (controllato con determine_residential_flags).
             points = np.asarray(coordinates, dtype=float)[residential, :2]
-            dist = np.linalg.norm(points[:, None, :] - self.circles[None, :, :2], axis=2)
-            depth = self.circles[None, :, 2] - dist
-            depth = np.max(np.where(depth > 0, depth, -np.inf), axis=1)
+            border = np.zeros(len(points), dtype=bool)
+            for angle in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+                step = self.border_width * np.array([np.cos(angle), np.sin(angle)])
+                border |= determine_residential_flags(points + step) == 0
             # Vicino al confine: margine extra proporzionale all'incertezza del punto.
-            shift = shift + np.where(depth < self.border_width, self.border_k * np.sqrt(variance), 0.0)
+            shift = shift + np.where(border, self.border_k * np.sqrt(variance), 0.0)
             predictions[residential] += shift
             return predictions
 
         self.decide = decide
 
-        # Per ogni zona: lista di componenti (GP fittato, rumore assoluto, peso).
-        # Con una scelta netta c'e' un solo componente con peso 1.
+        # Per ogni zona: GP scelto (gia' fittato) e varianza del rumore in scala assoluta.
         self.tiles = []
 
     # Don't change the name or the signature of this function
@@ -145,22 +115,14 @@ class Model(object):
             return np.all((points >= low) & (points < high), axis=1)
 
         def make_kernel(name):
-            # Kernel candidati; tutti con un termine di rumore bianco in fondo.
-            amp = self.amplitude_bounds
-            noise = WhiteKernel(0.005, self.noise_bounds)
-            if name == "matern15":
-                return ConstantKernel(1.0, amp) * Matern(0.05, self.length_scale_bounds, nu=1.5) + noise
-            if name == "matern05":
-                return ConstantKernel(1.0, amp) * Matern(0.05, self.length_scale_bounds, nu=0.5) + noise
-            if name == "multiscale_matern":
-                return (ConstantKernel(1.0, amp) * Matern(self.short_scale_init, self.short_scale_bounds, nu=1.5)
-                        + ConstantKernel(0.5, amp) * Matern(self.long_scale_init, self.long_scale_bounds, nu=1.5)
-                        + noise)
-            if name == "multiscale_rbf":
-                return (ConstantKernel(1.0, amp) * RBF(self.short_scale_init, self.short_scale_bounds)
-                        + ConstantKernel(0.5, amp) * RBF(self.long_scale_init, self.long_scale_bounds)
-                        + noise)
-            raise ValueError(f"Unknown kernel candidate: {name}")
+            # Kernel candidati (C = ampiezza, M = Matern); a tutti si somma il rumore bianco.
+            C = lambda v=1.0: ConstantKernel(v, self.amplitude_bounds)
+            M = lambda ls, nu, b=self.length_scale_bounds: Matern(ls, b, nu=nu)
+            kernels = {
+                "matern15": C() * M(0.05, 1.5),
+                "matern05": C() * M(0.05, 0.5),
+            }
+            return kernels[name] + WhiteKernel(0.005, self.noise_bounds)
 
         def cv_cost(kernel, X_tile, y_tile, f_tile, seed):
             # Cross-validation a k fold con il costo del task: per ogni fold si rifitta il GP
@@ -176,12 +138,11 @@ class Model(object):
                                               optimizer=None).fit(X_tile[train], y_tile[train])
                 mean, std = gp.predict(X_tile[val], return_std=True)
                 noise = np.full(val.sum(), kernel.k2.noise_level * np.var(y_tile[train]))
-                predictions = self.decide(mean, std, noise, f_tile[val], X_tile[val],
-                                          noise_fraction=self.cv_noise_fraction)
+                predictions = self.decide(mean, std, noise, f_tile[val], X_tile[val], self.cv_noise_fraction)
                 total += calculate_cost(y_tile[val], predictions, f_tile[val]) * val.sum()
             return total / len(X_tile)
 
-        chosen = {name: 0.0 for name in self.kernel_candidates}
+        chosen = {name: 0 for name in self.kernel_candidates}
         self.tiles = []
         for tile in range(n * n):
             mask = region(X, tile, self.tile_margin)
@@ -189,54 +150,30 @@ class Model(object):
                 # Zona quasi vuota: si allarga la finestra per avere abbastanza punti.
                 mask = region(X, tile, self.tile_margin + 0.05)
             X_tile, y_tile, f_tile = X[mask], y[mask], flags[mask]
-            variance = np.var(y_tile)
 
             # 1) Per ogni kernel candidato: iperparametri stimati con la marginal likelihood
             #    sui punti della zona (target normalizzati).
-            candidates = []
+            # 2) Si tiene il kernel con il costo di cross-validation piu' basso.
+            best = None
             for name in self.kernel_candidates:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", ConvergenceWarning)
                     gp = GaussianProcessRegressor(kernel=make_kernel(name), normalize_y=True,
                                                   random_state=0).fit(X_tile, y_tile)
-                noise = gp.kernel_.k2.noise_level * variance
-                candidates.append((name, gp, noise))
-
-            # 2) Scelta (o combinazione) dei candidati secondo self.selection_method.
-            method = self.selection_method
-            if method in ("average_uniform", "average_evidence"):
-                if method == "average_uniform":
-                    weights = np.ones(len(candidates))
-                else:
-                    # Pesi proporzionali all'evidenza: exp(log marginal likelihood).
-                    log_ml = np.array([gp.log_marginal_likelihood_value_ for _, gp, _ in candidates])
-                    weights = np.exp(log_ml - log_ml.max())
-                weights = weights / weights.sum()
-                for (name, _, _), w in zip(candidates, weights):
-                    chosen[name] += w
-                self.tiles.append([(gp, noise, w) for (_, gp, noise), w in zip(candidates, weights)])
-                continue
-
-            scores = []
-            for name, gp, noise in candidates:
-                if method == "cv_cost":
-                    scores.append(cv_cost(gp.kernel_, X_tile, y_tile, f_tile, seed=tile))
-                elif method in ("bic", "aic"):
-                    # -2 log ML + penalita' per il numero di iperparametri liberi.
-                    n_params = len(gp.kernel_.theta)
-                    penalty = n_params * np.log(len(X_tile)) if method == "bic" else 2 * n_params
-                    scores.append(-2 * gp.log_marginal_likelihood_value_ + penalty)
-                else:
-                    raise ValueError(f"Unknown selection method: {method}")
-            best = int(np.argmin(scores))
-            name, gp, noise = candidates[best]
+                score = cv_cost(gp.kernel_, X_tile, y_tile, f_tile, seed=tile)
+                if best is None or score < best[0]:
+                    best = (score, name, gp)
+            _, name, gp = best
             chosen[name] += 1
-            # 3) Il GP scelto e' gia' fittato su tutti i punti della zona con i suoi iperparametri.
-            self.tiles.append([(gp, noise, 1.0)])
 
-        print(f"Fitted {len(self.tiles)} local GPs ({n}x{n} tiles), selection: {self.selection_method}")
+            # 3) Il GP scelto e' gia' fittato su tutti i punti della zona: si salva insieme
+            #    al suo rumore riportato in scala assoluta.
+            noise = gp.kernel_.k2.noise_level * np.var(y_tile)
+            self.tiles.append((gp, noise))
+
+        print(f"Fitted {len(self.tiles)} local GPs ({n}x{n} tiles)")
         for name, count in chosen.items():
-            print(f"  {name}: {count:.1f} tiles")
+            print(f"  tiles choosing {name}: {count}")
 
     # Don't change the name or the signature of this function
     def predict_pollution(self, test_coordinates: np.ndarray, test_residential_flags: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -257,38 +194,22 @@ class Model(object):
         n = self.tile_grid
         noise_var = np.zeros(X.shape[0], dtype=float)
 
-        # Ogni punto viene previsto dalla zona in cui cade.
+        # Ogni punto viene previsto dal GP della zona in cui cade.
         column = np.minimum((X[:, 0] * n).astype(int), n - 1)
         row = np.minimum((X[:, 1] * n).astype(int), n - 1)
         tile_index = column + n * row
-        for tile, components in enumerate(self.tiles):
+        for tile, (gp, noise) in enumerate(self.tiles):
             idx = np.where(tile_index == tile)[0]
             if len(idx) == 0:
                 continue
-            means, variances, noises, weights = [], [], [], []
             with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-                for gp, noise, w in components:
-                    mean, std = gp.predict(X[idx], return_std=True)
-                    means.append(mean)
-                    variances.append(std ** 2)
-                    noises.append(noise)
-                    weights.append(w)
-            if len(components) == 1:
-                gp_mean[idx] = means[0]
-                gp_std[idx] = np.sqrt(variances[0])
-            else:
-                # Media di piu' GP: media pesata, varianza della miscela.
-                w = np.array(weights)[:, None]
-                m = np.array(means)
-                mix_mean = np.sum(w * m, axis=0)
-                mix_var = np.sum(w * (np.array(variances) + m ** 2), axis=0) - mix_mean ** 2
-                gp_mean[idx] = mix_mean
-                gp_std[idx] = np.sqrt(np.maximum(mix_var, 0.0))
-            noise_var[idx] = float(np.dot(weights, noises))
+                gp_mean[idx], gp_std[idx] = gp.predict(X[idx], return_std=True)
+            noise_var[idx] = noise
 
         # TODO: Use the GP posterior to form your predictions here
         # Regola di decisione: margine sui punti residenziali (vedi self.decide in __init__).
-        predictions = self.decide(gp_mean, gp_std, noise_var, test_residential_flags, X)
+        predictions = self.decide(gp_mean, gp_std, noise_var, test_residential_flags, X,
+                                  self.test_noise_fraction)
 
         return predictions, gp_mean, gp_std
 
